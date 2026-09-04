@@ -14,16 +14,10 @@ WebBanking{
 }
 
 local CONSTANTS = {
-  loginApi = "https://ecaap.fidelity.com/user/factor/password/authentication",
-  sessionApi = "https://ecaap.fidelity.com/user/session/login",
   graphqlApi = "https://digital.fidelity.com/ftgw/digital/picoserver/api/graphql",
-  activityApi = "https://digital.fidelity.com/ftgw/digital/webactivity/api/graphql",
-  documentsApi = "https://digital.fidelity.com/ftgw/digital/documents/api/graphql",
   portfolioSummary = "https://digital.fidelity.com/ftgw/digital/portfolio/summary",
   portfolioGetContextApi = "https://digital.fidelity.com/ftgw/digital/portfolio/api/GetContext",
   assetAllocationApi = "https://digital.fidelity.com/ftgw/digital/performance-api/v1/asset-allocation",
-  activityPage = "https://digital.fidelity.com/ftgw/digital/portfolio/activity",
-  documentsPage = "https://digital.fidelity.com/ftgw/digital/portfolio/documents",
   logoutUrl = "https://www.fidelity.com/logout"
 }
 
