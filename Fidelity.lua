@@ -7,7 +7,7 @@
 --
 
 WebBanking{
-  version     = 0.92,
+  version     = 0.93,
   url         = "https://www.fidelity.com",
   services    = {"Fidelity"},
   description = "Fidelity Investments — Beta (Cookie-Import)"
@@ -251,21 +251,30 @@ end
 function InitializeSession(protocol, bankCode, username, username2, password, username3)
   local storage = rawget(_G, "LocalStorage")
   local accountKey = username or ""
-  local canReuse =
-    storage and storage.connection and storage.connectionAccountKey == accountKey
+  local canReuse = false
 
-  if canReuse then
-    connection = storage.connection
-    session.persistedConnection = true
-  else
-    connection = Connection()
-    if storage then
-      storage.connection = connection
-      storage.connectionAccountKey = accountKey
+  if storage then
+    storage.connectionsByAccount = storage.connectionsByAccount or {}
+    local entry = storage.connectionsByAccount[accountKey]
+    if storage.connection ~= nil and storage.connectionAccountKey == accountKey then
+      entry = entry or {}
+      entry.connection = storage.connection
+      storage.connectionsByAccount[accountKey] = entry
+    end
+    canReuse = entry ~= nil and entry.connection ~= nil
+    if canReuse then
+      connection = entry.connection
       session.persistedConnection = true
     else
-      session.persistedConnection = false
+      connection = Connection()
+      storage.connectionsByAccount[accountKey] = { connection = connection }
+      session.persistedConnection = true
     end
+    storage.connection = connection
+    storage.connectionAccountKey = accountKey
+  else
+    connection = Connection()
+    session.persistedConnection = false
   end
 
   -- Apply in case we reused an existing connection object.

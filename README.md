@@ -1,7 +1,7 @@
 # Fidelity — MoneyMoney Extension
 Plugin Homepage: https://github.com/rosch100/Fidelity-MoneyMoney
 Bank/Portal: https://www.fidelity.com
-Version: **0.92**
+Version: **0.93**
 Status: Beta — Cookie-Import (Username/Passwort blockiert: Akamai + MFA)
 Hub (gemeinsame Tools/Doku): https://github.com/rosch100/moneymoney-extensions
 Anmeldung: Cookie-Import `COOKIE:ATC=…;ET=…` (Username/Passwort in Lua durch Akamai blockiert).

@@ -196,4 +196,42 @@ do
   assertEq(result, blockedMsg, "InitializeSession.direct-login.blocked.message")
 end
 
+-- Multi-login: two usernames keep distinct connections in the map
+do
+  local connA = {
+    language = "",
+    useragent = "",
+    getCookies = function() return "" end,
+    request = function() return nil end,
+  }
+  local connB = {
+    language = "",
+    useragent = "",
+    getCookies = function() return "" end,
+    request = function() return nil end,
+  }
+  local created = 0
+  Connection = function()
+    created = created + 1
+    if created == 1 then return connA end
+    if created == 2 then return connB end
+    return {
+      language = "",
+      useragent = "",
+      getCookies = function() return "" end,
+      request = function() return nil end,
+    }
+  end
+  LocalStorage = {}
+  InitializeSession(ProtocolWebBanking, "Fidelity", "user-a", nil, "", nil)
+  assertEq(LocalStorage.connectionsByAccount["user-a"].connection, connA, "multiLogin.map.userA")
+  InitializeSession(ProtocolWebBanking, "Fidelity", "user-b", nil, "", nil)
+  assertEq(LocalStorage.connectionsByAccount["user-b"].connection, connB, "multiLogin.map.userB")
+  assertEq(LocalStorage.connectionsByAccount["user-a"].connection, connA, "multiLogin.map.userA.kept")
+  assertEq(LocalStorage.connectionAccountKey, "user-b", "multiLogin.activeKey.userB")
+  InitializeSession(ProtocolWebBanking, "Fidelity", "user-a", nil, "", nil)
+  assertEq(LocalStorage.connection, connA, "multiLogin.reusesUserA")
+  assertEq(LocalStorage.connectionAccountKey, "user-a", "multiLogin.activeKey.userA")
+end
+
 print("ALL FIDELITY COOKIE-IMPORT UNIT TESTS PASSED")
