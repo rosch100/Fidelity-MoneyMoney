@@ -12,7 +12,7 @@ def file_contains(path: pathlib.Path, pattern: str) -> bool:
     text = path.read_text(encoding="utf-8", errors="replace")
     return re.search(pattern, text, flags=re.M | re.S) is not None
 def main() -> None:
-    lua_files = sorted(ROOT.glob("*.lua"))
+    lua_files = sorted(path for path in ROOT.glob("*.lua") if path.is_file())
     assert_true(len(lua_files) >= 1, f"Keine .lua im Repo-Root: {ROOT}")
     for lua_path in lua_files:
         raw = lua_path.read_bytes()
