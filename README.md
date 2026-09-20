@@ -32,6 +32,12 @@ Schritt-für-Schritt: [Hub — Cookie-Import](https://github.com/rosch100/moneym
 Nach dem Einrichten den Zugang aktualisieren. Bei abgelaufener Session Cookies
 erneut kopieren.
 
+## Fehler & Ideen
+
+Issues bitte über GitHub melden:
+[Neues Issue](https://github.com/rosch100/Fidelity-MoneyMoney/issues/new/choose).
+Keine MoneyMoney-Logdateien anhängen — Details stehen im Bug-Formular.
+
 ## Lizenz
 
 MIT — siehe [LICENSE](LICENSE).
