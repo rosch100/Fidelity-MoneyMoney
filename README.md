@@ -8,6 +8,9 @@ Gemeinsame Infos: https://github.com/rosch100/moneymoney-extensions
 
 ## Installation
 
+Noch nicht auf [moneymoney.app/extensions](https://moneymoney.app/extensions/) —
+Veröffentlichung mit dem nächsten MoneyMoney-Update (Whitelist).
+
 Unsignierte Datei:
 [Fidelity.lua](https://raw.githubusercontent.com/rosch100/Fidelity-MoneyMoney/main/Fidelity.lua)
 
