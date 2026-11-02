@@ -22,6 +22,22 @@ local CONSTANTS = {
 }
 
 local connection
+-- Connection-Objekte je Benutzername, nur für die Laufzeit (nicht in LocalStorage).
+local liveConnections = {}
+
+-- Schreibt einen Cookie-String ("a=1; b=2") in den Cookie-Jar der Connection.
+local function applyCookieStringToConnection(cookieString)
+  if type(connection.setCookie) ~= "function" then
+    error("Fidelity: Connection:setCookie fehlt, Cookies können nicht gesetzt werden.")
+  end
+  for pair in cookieString:gmatch("[^;]+") do
+    local name, value = pair:match("^%s*([^=%s]+)%s*=%s*(.-)%s*$")
+    if name then
+      connection:setCookie(name .. "=" .. value)
+    end
+  end
+end
+
 local session = { cookies = "", persistedConnection = false }
 
 local function extractCookieValue(cookieString, cookieName)
@@ -270,9 +286,9 @@ function restoreImportedCookies(accountKey)
   end
 end
 
--- Nach erfolgreicher Sitzungsprüfung den gespeicherten Import auf den Stand der Connection setzen.
--- Die Connection ist die Quelle der Wahrheit: Ein dort verlorener Cookie darf nicht aus dem
--- Import zurückkommen. session.cookies ist dafür ungeeignet, weil es den Import bereits enthält.
+-- Nach erfolgreicher Sitzungsprüfung den gespeicherten Import mit den Cookies der Connection aktualisieren.
+-- Neue Werte ersetzen die gespeicherten, übrige Cookies bleiben erhalten. Ein vollständiger Ersatz
+-- würde Cookies verwerfen, die getCookies() für die zuletzt aufgerufene URL nicht liefert.
 function syncImportedCookies(accountKey)
   local storage = rawget(_G, "LocalStorage")
   if not storage or not storage.connectionsByAccount or not connection then
@@ -281,7 +297,7 @@ function syncImportedCookies(accountKey)
   local entry = storage.connectionsByAccount[accountKey]
   local current = connection:getCookies() or ""
   if entry and type(entry.importedCookies) == "string" and entry.importedCookies ~= "" and current ~= "" then
-    entry.importedCookies = current
+    entry.importedCookies = mergeCookies(entry.importedCookies, current)
   end
 end
 
@@ -294,46 +310,44 @@ function persistImportedCookies(cookieString)
   storage.connectionsByAccount = storage.connectionsByAccount or {}
   local entry = storage.connectionsByAccount[accountKey]
   if not entry then
-    entry = { connection = connection }
+    entry = {}
     storage.connectionsByAccount[accountKey] = entry
   end
   entry.importedCookies = cookieString
-
-  if type(connection.setCookie) ~= "function" then
-    error("Fidelity: Connection:setCookie fehlt, Cookies können nicht gesetzt werden.")
-  end
-  for pair in cookieString:gmatch("[^;]+") do
-    local name, value = pair:match("^%s*([^=%s]+)%s*=%s*(.-)%s*$")
-    if name then
-      connection:setCookie(name .. "=" .. value)
-    end
-  end
+  applyCookieStringToConnection(cookieString)
 end
 
 function InitializeSession(protocol, bankCode, username, username2, password, username3)
   local storage = rawget(_G, "LocalStorage")
   local accountKey = username or ""
-  local canReuse = false
+
+  -- `session` lebt im Modul und überdauert den Kontowechsel: Cookies des vorherigen Kontos verwerfen.
+  if session.accountKey ~= accountKey then
+    session.cookies = ""
+    session.accountKey = accountKey
+  end
 
   if storage then
     storage.connectionsByAccount = storage.connectionsByAccount or {}
-    local entry = storage.connectionsByAccount[accountKey]
-    if storage.connection ~= nil and storage.connectionAccountKey == accountKey then
-      entry = entry or {}
-      entry.connection = storage.connection
-      storage.connectionsByAccount[accountKey] = entry
-    end
-    canReuse = entry ~= nil and entry.connection ~= nil
-    if canReuse then
-      connection = entry.connection
-      session.persistedConnection = true
-    else
-      connection = Connection()
-      storage.connectionsByAccount[accountKey] = { connection = connection }
-      session.persistedConnection = true
-    end
-    storage.connection = connection
+    -- Connection-Objekte gehören nicht in LocalStorage: MoneyMoney serialisiert sie beim Beenden nicht,
+    -- der gespeicherte Cookie-Import (importedCookies) würde sonst mit verloren gehen.
+    -- Frühere Versionen haben sie dort abgelegt; sie werden hier entfernt.
+    storage.connection = nil
+    local entry = storage.connectionsByAccount[accountKey] or {}
+    entry.connection = nil
+    storage.connectionsByAccount[accountKey] = entry
     storage.connectionAccountKey = accountKey
+    connection = liveConnections[accountKey]
+    if connection == nil then
+      connection = Connection()
+      liveConnections[accountKey] = connection
+      -- Neue Connection (z. B. nach einem Neustart): gespeicherten Import in den Jar übernehmen,
+      -- damit der Jar den vollständigen Import enthält, bevor er zurückgeschrieben wird.
+      if type(entry.importedCookies) == "string" and entry.importedCookies ~= "" then
+        applyCookieStringToConnection(entry.importedCookies)
+      end
+    end
+    session.persistedConnection = true
   else
     connection = Connection()
     session.persistedConnection = false
@@ -353,6 +367,8 @@ function InitializeSession(protocol, bankCode, username, username2, password, us
     storedSessionChecked = true
     storedSessionValid = isAuthenticated()
     if storedSessionValid == true then
+      -- Vom Server erneuerte Cookies (z. B. ATC) auch für Folge-Requests dieser Sitzung übernehmen.
+      session.cookies = mergeCookies(session.cookies, connection:getCookies() or "")
       syncImportedCookies(accountKey)
       return nil
     end

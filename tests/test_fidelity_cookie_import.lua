@@ -176,7 +176,7 @@ do
   local result = InitializeSession(
     ProtocolWebBanking,
     "Fidelity",
-    nil,
+    "cookie-failure-user",
     nil,
     "COOKIE:a=1,b=2",
     nil
@@ -232,13 +232,12 @@ do
   end
   LocalStorage = {}
   InitializeSession(ProtocolWebBanking, "Fidelity", "user-a", nil, "", nil)
-  assertEq(LocalStorage.connectionsByAccount["user-a"].connection, connA, "multiLogin.map.userA")
+  assertEq(LocalStorage.connectionsByAccount["user-a"].connection, nil, "multiLogin.noConnectionInStorage.userA")
   InitializeSession(ProtocolWebBanking, "Fidelity", "user-b", nil, "", nil)
-  assertEq(LocalStorage.connectionsByAccount["user-b"].connection, connB, "multiLogin.map.userB")
-  assertEq(LocalStorage.connectionsByAccount["user-a"].connection, connA, "multiLogin.map.userA.kept")
+  assertEq(LocalStorage.connectionsByAccount["user-b"].connection, nil, "multiLogin.noConnectionInStorage.userB")
   assertEq(LocalStorage.connectionAccountKey, "user-b", "multiLogin.activeKey.userB")
   InitializeSession(ProtocolWebBanking, "Fidelity", "user-a", nil, "", nil)
-  assertEq(LocalStorage.connection, connA, "multiLogin.reusesUserA")
+  assertEq(created, 2, "multiLogin.reusesLiveConnectionUserA")
   assertEq(LocalStorage.connectionAccountKey, "user-a", "multiLogin.activeKey.userA")
 end
 
@@ -263,7 +262,7 @@ do
     "unreachableSession.noCookiePrompt")
 end
 
--- Gespeicherter Import wird nach gültiger Sitzungsprüfung auf den Stand der Connection gesetzt.
+-- Gespeicherter Import wird nach gültiger Sitzungsprüfung mit den Cookies der Connection aktualisiert.
 do
   local syncConnection = {
     language = "",
@@ -277,10 +276,10 @@ do
       return "not ok", nil
     end,
   }
+  Connection = function() return syncConnection end
   LocalStorage = {
     connectionsByAccount = {
       ["fid-sync"] = {
-        connection = syncConnection,
         importedCookies = "ATC=old; ET=token; LOSTCOOKIE=x",
       },
     },
@@ -289,7 +288,7 @@ do
   assertEq(result, nil, "syncImportedCookies.sessionValid")
   local stored = LocalStorage.connectionsByAccount["fid-sync"].importedCookies
   assertEq(stored:find("ATC=fresh", 1, true) ~= nil, true, "syncImportedCookies.storesFreshValue")
-  assertEq(stored:find("LOSTCOOKIE", 1, true) == nil, true, "syncImportedCookies.lostCookieNotRestored")
+  assertEq(stored:find("LOSTCOOKIE=x", 1, true) ~= nil, true, "syncImportedCookies.unlistedCookieKept")
   LocalStorage = {}
 end
 
