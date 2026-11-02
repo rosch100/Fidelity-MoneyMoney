@@ -176,7 +176,7 @@ local function isAuthenticatedViaGraphql()
   )
 
   if not response or type(response) ~= "string" then
-    return false
+    return nil
   end
 
   local success, data = pcall(function() return JSON(response):dictionary() end)
@@ -211,7 +211,7 @@ local function isAuthenticatedViaPortfolioGetContext()
   )
 
   if not response or type(response) ~= "string" then
-    return false
+    return nil
   end
 
   if response:find("<!doctype html", 1, false) or (mimeType and mimeType:find("html")) then
@@ -235,17 +235,64 @@ local function isAuthenticatedViaPortfolioGetContext()
   return false
 end
 
+-- true: Sitzung gültig. false: Server meldet die Sitzung als ungültig.
+-- nil: keine Antwort von beiden Prüfungen (Netzwerkfehler), Cookies nicht anfordern.
 local function isAuthenticated()
-  if isAuthenticatedViaGraphql() then
+  local viaGraphql = isAuthenticatedViaGraphql()
+  if viaGraphql == true then
     return true
   end
 
   MM.printStatus("Cookie-Validierung via GraphQL fehlgeschlagen; versuche GetContext...")
-  return isAuthenticatedViaPortfolioGetContext()
+  local viaGetContext = isAuthenticatedViaPortfolioGetContext()
+  if viaGetContext == true then
+    return true
+  end
+  if viaGraphql == nil and viaGetContext == nil then
+    return nil
+  end
+  return false
 end
 
 function SupportsBank(protocol, bankCode)
   return protocol == ProtocolWebBanking and (bankCode == "Fidelity" or bankCode == "Fidelity Investments")
+end
+
+function restoreImportedCookies(accountKey)
+  local storage = rawget(_G, "LocalStorage")
+  if not storage or not storage.connectionsByAccount then
+    return
+  end
+  local entry = storage.connectionsByAccount[accountKey]
+  if entry and type(entry.importedCookies) == "string" and entry.importedCookies ~= "" then
+    -- Importierte Cookies sind nur die Basis; frischere Werte der Connection gewinnen.
+    session.cookies = mergeCookies(entry.importedCookies, session.cookies)
+  end
+end
+
+function persistImportedCookies(cookieString)
+  local storage = rawget(_G, "LocalStorage")
+  if not storage then
+    error("Fidelity: LocalStorage nicht verfügbar, Cookies können nicht gespeichert werden.")
+  end
+  local accountKey = storage.connectionAccountKey or ""
+  storage.connectionsByAccount = storage.connectionsByAccount or {}
+  local entry = storage.connectionsByAccount[accountKey]
+  if not entry then
+    entry = { connection = connection }
+    storage.connectionsByAccount[accountKey] = entry
+  end
+  entry.importedCookies = cookieString
+
+  if type(connection.setCookie) ~= "function" then
+    error("Fidelity: Connection:setCookie fehlt, Cookies können nicht gesetzt werden.")
+  end
+  for pair in cookieString:gmatch("[^;]+") do
+    local name, value = pair:match("^%s*([^=%s]+)%s*=%s*(.-)%s*$")
+    if name then
+      connection:setCookie(name .. "=" .. value)
+    end
+  end
 end
 
 function InitializeSession(protocol, bankCode, username, username2, password, username3)
@@ -281,17 +328,26 @@ function InitializeSession(protocol, bankCode, username, username2, password, us
   connection.language = "en-US"
   connection.useragent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15"
 
-  -- Cookie import mode
+  restoreImportedCookies(accountKey)
+
+  -- If persisted cookies are still valid, skip the bot-protected login flow.
+  session.cookies = mergeCookies(session.cookies, connection:getCookies() or "")
+  local storedSessionChecked = false
+  local storedSessionValid = nil
+  if session.cookies ~= "" and (session.cookies:match("ATC") or session.cookies:match("ET")) then
+    storedSessionChecked = true
+    storedSessionValid = isAuthenticated()
+    if storedSessionValid == true then
+      return nil
+    end
+  end
+
   if password and password:match("^COOKIE:") then
     return loginWithImportedCookies(password:sub(8))
   end
 
-  -- If persisted cookies are still valid, skip the bot-protected login flow.
-  session.cookies = mergeCookies(session.cookies, connection:getCookies() or "")
-  if session.cookies ~= "" and (session.cookies:match("ATC") or session.cookies:match("ET")) then
-    if isAuthenticated() then
-      return nil
-    end
+  if storedSessionChecked and storedSessionValid == nil then
+    return "Fidelity ist gerade nicht erreichbar. Bitte in einigen Minuten erneut versuchen."
   end
 
   if username == "" or password == "" or username == nil or password == nil then
@@ -333,6 +389,7 @@ function loginWithImportedCookies(cookieString)
 
   if isAuthenticated() then
     MM.printStatus("Cookie import successful")
+    persistImportedCookies(formattedCookies)
     return nil
   end
 

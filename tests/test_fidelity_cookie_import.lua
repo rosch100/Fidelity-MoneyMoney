@@ -10,6 +10,8 @@ AccountTypePortfolio = 5
 LoginFailed = "LoginFailed"
 
 local capturedHeaders
+setCookieCalls = {}
+LocalStorage = {}
 local capturedRequest = {}
 
 -- Stub `Connection()` wie von MoneyMoney erwartet.
@@ -17,6 +19,9 @@ function Connection()
   return {
     language = "",
     useragent = "",
+    setCookie = function(self, cookie)
+      table.insert(setCookieCalls, cookie)
+    end,
     getCookies = function()
       -- Cookie import mode nutzt `getCookies()` danach nur für Tests; hier ist das nicht relevant.
       return ""
@@ -119,6 +124,8 @@ do
   )
   assertEq(result, nil, "InitializeSession.cookie-import.success")
   assertEq(capturedHeaders and capturedHeaders["Cookie"], "name1=v1; name2=v2", "InitializeSession.cookie-import.normalized-cookie-header")
+  assertEq(LocalStorage.connectionsByAccount[""].importedCookies, "name1=v1; name2=v2", "InitializeSession.cookie-import.persisted")
+  assertEq(setCookieCalls[#setCookieCalls], "name2=v2", "InitializeSession.cookie-import.setCookie")
 end
 
 -- Cookie formatting: trim + bereits semikolon-separiert -> unverändert
@@ -154,6 +161,7 @@ end
 -- Cookie import failure: kein portfolio/Portfolio Summary im Response
 do
   -- überschreibe request stub: nie "portfolio" matchen
+  LocalStorage = {}
   function Connection()
     return {
       getCookies = function() return "" end,
@@ -232,6 +240,27 @@ do
   InitializeSession(ProtocolWebBanking, "Fidelity", "user-a", nil, "", nil)
   assertEq(LocalStorage.connection, connA, "multiLogin.reusesUserA")
   assertEq(LocalStorage.connectionAccountKey, "user-a", "multiLogin.activeKey.userA")
+end
+
+-- Gespeicherte Cookies, aber keine Antwort der Sitzungsprüfung: keine Cookie-Anforderung.
+do
+  LocalStorage = {}
+  Connection = function()
+    return {
+      language = "",
+      useragent = "",
+      setCookie = function() end,
+      getCookies = function() return "ATC=stored" end,
+      request = function() return nil end,
+    }
+  end
+  local unreachable = InitializeSession(ProtocolWebBanking, "Fidelity", "user-u", nil, "secret", nil)
+  assertEq(
+    type(unreachable) == "string"
+      and unreachable:find("nicht erreichbar", 1, true) ~= nil
+      and unreachable:find("Cookie-Import", 1, true) == nil,
+    true,
+    "unreachableSession.noCookiePrompt")
 end
 
 print("ALL FIDELITY COOKIE-IMPORT UNIT TESTS PASSED")
