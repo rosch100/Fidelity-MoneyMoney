@@ -263,4 +263,34 @@ do
     "unreachableSession.noCookiePrompt")
 end
 
+-- Gespeicherter Import wird nach gültiger Sitzungsprüfung auf den Stand der Connection gesetzt.
+do
+  local syncConnection = {
+    language = "",
+    useragent = "",
+    setCookie = function() end,
+    getCookies = function() return "ATC=fresh; ET=token" end,
+    request = function(self, method, url, body, contentType, headers)
+      if url and url:find("picoserver/api/graphql", 1, true) then
+        return "GRAPHQL_OK", nil
+      end
+      return "not ok", nil
+    end,
+  }
+  LocalStorage = {
+    connectionsByAccount = {
+      ["fid-sync"] = {
+        connection = syncConnection,
+        importedCookies = "ATC=old; ET=token; LOSTCOOKIE=x",
+      },
+    },
+  }
+  local result = InitializeSession(ProtocolWebBanking, "Fidelity", "fid-sync", nil, "secret", nil)
+  assertEq(result, nil, "syncImportedCookies.sessionValid")
+  local stored = LocalStorage.connectionsByAccount["fid-sync"].importedCookies
+  assertEq(stored:find("ATC=fresh", 1, true) ~= nil, true, "syncImportedCookies.storesFreshValue")
+  assertEq(stored:find("LOSTCOOKIE", 1, true) == nil, true, "syncImportedCookies.lostCookieNotRestored")
+  LocalStorage = {}
+end
+
 print("ALL FIDELITY COOKIE-IMPORT UNIT TESTS PASSED")

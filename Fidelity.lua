@@ -270,6 +270,21 @@ function restoreImportedCookies(accountKey)
   end
 end
 
+-- Nach erfolgreicher Sitzungsprüfung den gespeicherten Import auf den Stand der Connection setzen.
+-- Die Connection ist die Quelle der Wahrheit: Ein dort verlorener Cookie darf nicht aus dem
+-- Import zurückkommen. session.cookies ist dafür ungeeignet, weil es den Import bereits enthält.
+function syncImportedCookies(accountKey)
+  local storage = rawget(_G, "LocalStorage")
+  if not storage or not storage.connectionsByAccount or not connection then
+    return
+  end
+  local entry = storage.connectionsByAccount[accountKey]
+  local current = connection:getCookies() or ""
+  if entry and type(entry.importedCookies) == "string" and entry.importedCookies ~= "" and current ~= "" then
+    entry.importedCookies = current
+  end
+end
+
 function persistImportedCookies(cookieString)
   local storage = rawget(_G, "LocalStorage")
   if not storage then
@@ -338,6 +353,7 @@ function InitializeSession(protocol, bankCode, username, username2, password, us
     storedSessionChecked = true
     storedSessionValid = isAuthenticated()
     if storedSessionValid == true then
+      syncImportedCookies(accountKey)
       return nil
     end
   end
