@@ -35,6 +35,12 @@ Schritt-für-Schritt: [Hub — Cookie-Import](https://github.com/rosch100/moneym
 Nach dem Einrichten den Zugang aktualisieren. Bei abgelaufener Session Cookies
 erneut kopieren.
 
+Der Cookie-Import bleibt gespeichert, solange die Sitzung gültig ist. Nach einem
+Neustart von MoneyMoney ist dann kein neuer Import und kein neuer Login mit
+SMS-Code nötig. Ist die gespeicherte Sitzung gültig, wertet die Erweiterung das
+Passwortfeld nicht aus. Ohne in MoneyMoney gespeichertes Passwort fragt MoneyMoney
+nach einem Neustart trotzdem nach dem Passwort.
+
 ## Fehler & Ideen
 
 Issues bitte über GitHub melden:
