@@ -32,8 +32,8 @@ Schritt-für-Schritt: [Hub — Cookie-Import](https://github.com/rosch100/moneym
 
 ## Nutzung
 
-Nach dem Einrichten den Zugang aktualisieren. Bei abgelaufener Session Cookies
-erneut kopieren.
+Nach dem Einrichten den Zugang aktualisieren. Ist die Sitzung abgelaufen, zeigt
+MoneyMoney das Passwortfeld: dort die frischen Cookies als `COOKIE:…` eingeben.
 
 Der Cookie-Import bleibt gespeichert, solange die Sitzung gültig ist. Nach einem
 Neustart von MoneyMoney ist dann kein neuer Import und kein neuer Login mit

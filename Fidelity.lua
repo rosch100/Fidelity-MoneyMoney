@@ -374,8 +374,21 @@ function InitializeSession(protocol, bankCode, username, username2, password, us
     end
   end
 
+  -- Gespeicherte Sitzung ist abgelaufen (nicht nur nicht erreichbar): LoginFailed zeigt MoneyMoney
+  -- das Passwortfeld, damit frische Cookies eingegeben werden.
+  local storedSessionExpired = storedSessionValid == false
+
   if password and password:match("^COOKIE:") then
-    return loginWithImportedCookies(password:sub(8))
+    local importError = loginWithImportedCookies(password:sub(8))
+    if importError == nil or not storedSessionExpired then
+      return importError
+    end
+    -- Das gespeicherte Passwort ist bei abgelaufener Sitzung meist der alte Cookie-String.
+    return LoginFailed
+  end
+
+  if storedSessionExpired then
+    return LoginFailed
   end
 
   if storedSessionChecked and storedSessionValid == nil then
