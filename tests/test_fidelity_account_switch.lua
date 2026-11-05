@@ -18,8 +18,8 @@ JSON = function(input)
   function builder:set(_) return self end
   function builder:json() return "{}" end
   function builder:dictionary()
-    if input == "GRAPHQL_OK" then
-      return { data = { getContext = { person = { assets = { { acctNum = "1" } } } } } }
+    if input == "GETCONTEXT_OK" then
+      return { getContext = { person = { id = "1", assets = { { acctNum = "1" } } } } }
     end
     error("invalid json")
   end
@@ -35,9 +35,9 @@ function Connection()
     setCookie = function() end,
     getCookies = function() return "" end,
     request = function(self, method, url, body, contentType, headers)
-      if url and url:find("picoserver/api/graphql", 1, true) then
+      if url and url:find("portfolio/api/GetContext", 1, true) then
         lastGraphqlCookieHeader = headers and headers["Cookie"]
-        return "GRAPHQL_OK", nil
+        return "GETCONTEXT_OK", nil
       end
       return "not ok", nil
     end,

@@ -14,10 +14,27 @@ WebBanking{
 }
 
 local CONSTANTS = {
-  graphqlApi = "https://digital.fidelity.com/ftgw/digital/picoserver/api/graphql",
   portfolioSummary = "https://digital.fidelity.com/ftgw/digital/portfolio/summary",
   portfolioGetContextApi = "https://digital.fidelity.com/ftgw/digital/portfolio/api/GetContext",
-  assetAllocationApi = "https://digital.fidelity.com/ftgw/digital/performance-api/v1/asset-allocation",
+  positionsApi = "https://digital.fidelity.com/ftgw/digital/portfolio/api/GetPositions",
+  activityHistoryApi = "https://digital.fidelity.com/ftgw/digital/activityapi/api/v1/transactions/history",
+  activityHeaders = {
+    ["appId"] = "ap182468",
+    ["appName"] = "activity-orders-ui",
+    ["Referer"] = "https://digital.fidelity.com/ftgw/digital/portfolio/activity"
+  },
+  statementsApi = "https://digitalservices.fidelity.com/ftgw/dp/retail-am-financialdoc/v1/accounts/communications/financial-documents/statements",
+  documentDownloadApi = "https://digitalservices.fidelity.com/ftgw/dp/retail-am-financialdoc/v2/accounts/communications/financial-documents/download",
+  documentHeaders = {
+    ["AppId"] = "AP160308",
+    ["AppName"] = "Document Access Hub",
+    ["FID-ORIGINATING-APP-ID"] = "AP160308",
+    ["FID-ORIGINATING-APP-VERSION"] = "2",
+    ["Origin"] = "https://digitalservices.fidelity.com",
+    ["Referer"] = "https://digitalservices.fidelity.com/navigate/ent-documentcenter/statements?poe=fidcom"
+  },
+  transactionLookbackDays = 91,
+  statementLookbackDays = 365,
   logoutUrl = "https://www.fidelity.com/logout"
 }
 
@@ -143,68 +160,6 @@ local function mergeCookies(existingCookies, newCookies)
   return table.concat(merged, "; ")
 end
 
-local function getContextQuery()
-  return {
-    operationName = "GetContext",
-    variables = {},
-    query = [[query GetContext {
-      getContext {
-        person {
-          assets {
-            acctNum
-            acctType
-            acctSubType
-            acctSubTypeDesc
-            gainLossBalanceDetail {
-              totalMarketVal
-              __typename
-            }
-            __typename
-          }
-          __typename
-        }
-        __typename
-      }
-    }]]
-  }
-end
-
-local function isAuthenticatedViaGraphql()
-  if not session.cookies or session.cookies == "" then
-    return false
-  end
-
-  local headers = {
-    ["Accept"] = "*/*",
-    ["Content-Type"] = "application/json",
-    ["Cookie"] = session.cookies,
-    ["Origin"] = "https://digital.fidelity.com",
-    ["Referer"] = CONSTANTS.portfolioSummary,
-    ["apollographql-client-version"] = "0.0.0"
-  }
-
-  local response, _ = connection:request(
-    "POST",
-    CONSTANTS.graphqlApi .. "?ref_at=portsum",
-    JSON():set(getContextQuery()):json(),
-    "application/json",
-    headers
-  )
-
-  if not response or type(response) ~= "string" then
-    return nil
-  end
-
-  local success, data = pcall(function() return JSON(response):dictionary() end)
-  if not success or not data or not data.data or not data.data.getContext then
-    return false
-  end
-
-  local person = data.data.getContext.person
-  local assets = person and person.assets
-  return type(assets) == "table" and #assets > 0
-end
-
 local function isAuthenticatedViaPortfolioGetContext()
   if not session.cookies or session.cookies == "" then
     return false
@@ -254,20 +209,7 @@ end
 -- true: Sitzung gültig. false: Server meldet die Sitzung als ungültig.
 -- nil: keine Antwort von beiden Prüfungen (Netzwerkfehler), Cookies nicht anfordern.
 local function isAuthenticated()
-  local viaGraphql = isAuthenticatedViaGraphql()
-  if viaGraphql == true then
-    return true
-  end
-
-  MM.printStatus("Cookie-Validierung via GraphQL fehlgeschlagen; versuche GetContext...")
-  local viaGetContext = isAuthenticatedViaPortfolioGetContext()
-  if viaGetContext == true then
-    return true
-  end
-  if viaGraphql == nil and viaGetContext == nil then
-    return nil
-  end
-  return false
+  return isAuthenticatedViaPortfolioGetContext()
 end
 
 function SupportsBank(protocol, bankCode)
@@ -530,117 +472,266 @@ local function buildSecurity(fields)
   return security
 end
 
-local function buildGraphqlPortfolio(data)
-  local positionData = data.data.getPosition
-  local priceLookup = {}
-  for _, position in ipairs(positionData.topBottomPositions or {}) do
-    local lastPrice = tonumber(position.lastPrice)
-    if position.symbol and lastPrice then
-      priceLookup[position.symbol] = lastPrice
-    end
+-- Gemeinsamer Abruf der Fidelity-APIs mit der Cookie-Sitzung. Liefert die JSON-Antwort als Tabelle.
+local function postJson(url, body, extraHeaders)
+  local headers = {
+    ["Accept"] = "application/json, text/plain, */*",
+    ["Content-Type"] = "application/json",
+    ["Cookie"] = session.cookies,
+    ["Origin"] = "https://digital.fidelity.com",
+    ["Referer"] = CONSTANTS.portfolioSummary
+  }
+  for name, value in pairs(extraHeaders or {}) do
+    headers[name] = value
   end
 
-  local accountDetails = positionData.position
-    and positionData.position.acctDetails
-    and positionData.position.acctDetails.acctDetail
-  if type(accountDetails) ~= "table" then
-    return nil
+  local encodedBody = JSON():set(body):json()
+  local response, _, mimeType = connection:request(
+    "POST",
+    url,
+    encodedBody,
+    "application/json",
+    headers
+  )
+
+  local newCookies = connection:getCookies() or ""
+  if newCookies ~= "" and extractCookieValue(newCookies, "portsum_.csrf") then
+    session.cookies = mergeCookies(session.cookies, newCookies)
   end
 
-  local securities = {}
-  local totalBalance = 0
-  for _, accountDetail in ipairs(accountDetails) do
-    local positions = accountDetail.positionDetails
-      and accountDetail.positionDetails.positionDetail
-    if type(positions) ~= "table" then
-      return nil
-    end
-
-    for _, position in ipairs(positions) do
-      local symbol = position.symbol
-      local quantity = tonumber(position.quantity)
-      local marketValue = position.marketValDetail
-        and tonumber(position.marketValDetail.marketVal)
-      local totalGainLoss = position.marketValDetail
-        and tonumber(position.marketValDetail.totalGainLoss)
-      local purchasePrice = totalGainLoss and quantity and quantity > 0 and marketValue
-        and (marketValue - totalGainLoss) / quantity
-        or nil
-      local security = buildSecurity({
-        name = position.securityDescription,
-        symbol = symbol,
-        cusip = position.cusip,
-        quantity = quantity,
-        price = resolveSecurityPrice(
-          symbol and priceLookup[symbol] or nil,
-          quantity,
-          marketValue),
-        marketValue = marketValue,
-        purchasePrice = purchasePrice
-      })
-      if not security then
-        return nil
-      end
-      table.insert(securities, security)
-      totalBalance = totalBalance + marketValue
-    end
+  if type(response) ~= "string" or response == "" then
+    error("Fidelity: Keine Serverantwort von " .. url .. ".")
   end
 
-  if #securities == 0 then
-    return nil
+  local head = response:sub(1, 300):lower()
+  if head:find("<!doctype html", 1, true) or head:find("<html", 1, true)
+      or (mimeType and mimeType:find("html")) then
+    error("Fidelity: Login-Seite statt Daten erhalten. Die Sitzung ist abgelaufen; bitte Cookies erneut importieren.")
   end
-  return { balance = totalBalance, securities = securities }
+
+  local success, data = pcall(function() return JSON(response):dictionary() end)
+  if not success or type(data) ~= "table" then
+    error("Fidelity: Ungültige Serverantwort von " .. url .. ".")
+  end
+  if type(data.status) == "number" and data.status >= 400 then
+    error("Fidelity: Serverfehler HTTP " .. tostring(data.status) .. " von " .. url .. ".")
+  end
+  return data
 end
 
-local function buildRestPortfolio(data)
-  local payload = data
-  if type(data.assetAllocation) == "table" then
-    payload = data.assetAllocation
+local function fetchContext()
+  local data = postJson(CONSTANTS.portfolioGetContextApi, {})
+  local person = data.getContext and data.getContext.person
+  if type(person) ~= "table" or type(person.id) ~= "string" or type(person.assets) ~= "table" then
+    error("Fidelity: GetContext enthält keine Kundendaten oder Konten.")
   end
+  return person
+end
 
-  local holdings = payload.holdingsDetails
-  if not holdings and payload.aggregateStyleDetail then
-    holdings = payload.aggregateStyleDetail.holdingDetails
-  end
-
-  local totalBalance = tonumber(payload.overallMarketValue)
-  if totalBalance == nil and type(holdings) == "table" then
-    totalBalance = 0
-    for _, holding in ipairs(holdings) do
-      local marketValue = tonumber(holding.marketValue)
-      if marketValue == nil then
-        error("Fidelity: Marktwert einer Position fehlt oder ist ungültig.")
-      end
-      totalBalance = totalBalance + marketValue
+local function findAsset(person, accountNumber)
+  for _, asset in ipairs(person.assets) do
+    if asset.acctNum == accountNumber then
+      return asset
     end
   end
-  if totalBalance == nil then
-    error("Fidelity: Kontostand fehlt in der Serverantwort.")
-  end
-  if type(holdings) ~= "table" then
-    error("Fidelity: Positionen fehlen in der Serverantwort oder haben ein ungültiges Format.")
-  end
+  error("Fidelity: Das Konto fehlt in GetContext.")
+end
 
+local function accountTotal(asset)
+  local detail = asset.gainLossBalanceDetail
+  local total = type(detail) == "table" and tonumber(detail.totalMarketVal) or nil
+  if total == nil then
+    error("Fidelity: Gesamtwert des Kontos fehlt in GetContext.")
+  end
+  return total
+end
+
+local function fetchPositions(account, customerId)
+  local data = postJson(CONSTANTS.positionsApi, {
+    acctList = {
+      {
+        acctNum = account.accountNumber,
+        acctType = account.accountType,
+        acctSubType = account.accountSubType,
+        preferenceDetail = false
+      }
+    },
+    customerId = customerId
+  })
+  local acctDetails = data.position and data.position.acctDetails and data.position.acctDetails.acctDetail
+  if type(acctDetails) ~= "table" then
+    error("Fidelity: Positionsdaten fehlen in der Serverantwort.")
+  end
+  return acctDetails
+end
+
+local function buildPositions(acctDetails, accountNumber)
   local securities = {}
-  for _, holding in ipairs(holdings) do
-    local symbol = holding.symbol
-    local quantity = tonumber(holding.quantity)
-    local marketValue = tonumber(holding.marketValue)
-    local security = buildSecurity({
-      name = holding.longName or holding.name or symbol,
-      symbol = symbol,
-      cusip = holding.cusip,
-      quantity = quantity,
-      price = resolveSecurityPrice(holding.price, quantity, marketValue),
-      marketValue = marketValue
-    })
-    if not security then
-      error("Fidelity: Serverantwort enthält mindestens eine unvollständige Position.")
+  for _, acctDetail in ipairs(acctDetails) do
+    if acctDetail.acctNum == accountNumber then
+      local positions = acctDetail.positionDetails and acctDetail.positionDetails.positionDetail
+      if type(positions) ~= "table" then
+        error("Fidelity: Positionsliste fehlt in der Serverantwort.")
+      end
+      for _, position in ipairs(positions) do
+        local quantity = tonumber(position.quantity)
+        local marketValue = position.marketValDetail and tonumber(position.marketValDetail.marketVal)
+        local costBasis = position.costBasisDetail and tonumber(position.costBasisDetail.costBasis)
+        local lastPrice = position.priceDetail and tonumber(position.priceDetail.lastPrice)
+        -- costBasis ist der Gesamteinstand; MoneyMoney erwartet den Einstandspreis je Stück.
+        local purchasePrice = costBasis and quantity and quantity > 0 and costBasis / quantity or nil
+        local security = buildSecurity({
+          name = position.securityDescription,
+          symbol = position.symbol,
+          cusip = position.cusip,
+          quantity = quantity,
+          price = resolveSecurityPrice(lastPrice, quantity, marketValue),
+          marketValue = marketValue,
+          purchasePrice = purchasePrice
+        })
+        if not security then
+          error("Fidelity: Serverantwort enthält mindestens eine unvollständige Position.")
+        end
+        table.insert(securities, security)
+      end
     end
-    table.insert(securities, security)
+  end
+  return securities
+end
+
+local function fetchTransactions(account, since, nowTimestamp)
+  -- MoneyMoney liefert beim ersten Abruf since = 0. since gilt nur als Untergrenze, wenn es
+  -- jünger als das Zeitfenster ist; sonst bleibt das Zeitfenster maßgeblich.
+  local fromTimestamp = nowTimestamp - CONSTANTS.transactionLookbackDays * 86400
+  if since ~= nil and since > fromTimestamp then
+    fromTimestamp = since
+  end
+  local data = postJson(CONSTANTS.activityHistoryApi, {
+    filter = {
+      accounts = {
+        { acctNum = account.accountNumber, acctName = account.name, acctType = account.accountType }
+      },
+      searchCriteriaDetail = {
+        txnFromDate = fromTimestamp,
+        txnToDate = nowTimestamp,
+        includeBasketNames = false,
+        includeCoreFundSettlementTransactions = false,
+        includeFullyPaidLendingTxn = false
+      }
+    }
+  }, CONSTANTS.activityHeaders)
+
+  local history = data.data and data.data.transactions
+  if type(history) ~= "table" then
+    error("Fidelity: Umsatzdaten fehlen in der Serverantwort.")
   end
 
-  return { balance = totalBalance, securities = securities }
+  local transactions = {}
+  for _, tx in ipairs(history) do
+    local amount = tx.amtDetail and tonumber(tx.amtDetail.net)
+    local bookingDate = tonumber(tx.date)
+    local valueDate = tx.dateDetail and tonumber(tx.dateDetail.postedDate)
+    if amount == nil or bookingDate == nil or valueDate == nil or type(tx.description) ~= "string" then
+      error("Fidelity: Umsatz ohne Betrag, Datum oder Beschreibung in der Serverantwort.")
+    end
+    if since == nil or bookingDate >= since then
+      table.insert(transactions, {
+        name = tx.description,
+        purpose = type(tx.shortDesc) == "string" and tx.shortDesc or nil,
+        transactionCode = tx.txnNum,
+        amount = amount,
+        currency = "USD",
+        bookingDate = bookingDate,
+        valueDate = valueDate,
+        booked = true
+      })
+    end
+  end
+  return transactions
+end
+
+local function hasPdfFormat(document)
+  local formats = document.formatTypes and document.formatTypes.formatType
+  return type(formats) == "table" and formats.isPDF == true
+end
+
+local function downloadStatement(document, account)
+  local data = postJson(CONSTANTS.documentDownloadApi, {
+    id = document.id,
+    formatType = "PDF",
+    docType = "STMT",
+    acctType = account.accountType
+  }, CONSTANTS.documentHeaders)
+
+  local detail = data.document and data.document.docDetail
+  if type(detail) ~= "table" or detail.contentType ~= "application/pdf"
+      or detail.encoding ~= "Base64" or type(detail.content) ~= "string" then
+    error("Fidelity: Kontoauszug hat ein unerwartetes Format.")
+  end
+
+  -- Der Inhalt ist nach dem Base64-Dekodieren direkt die PDF-Datei (Flag "deflated" ist nicht relevant).
+  local pdf = MM.base64decode(detail.content)
+  if pdf:sub(1, 4) ~= "%PDF" then
+    error("Fidelity: Der Kontoauszug ist keine gültige PDF-Datei.")
+  end
+  return pdf
+end
+
+-- Liefert die PDF-Kontoauszüge des Kontos, deren Kennung MoneyMoney noch nicht kennt.
+local function fetchNewStatements(accountInfo, knownSet)
+  local nowTimestamp = os.time()
+  local data = postJson(CONSTANTS.statementsApi, {
+    docType = "STMT",
+    startDate = os.date("%Y-%m-%d", nowTimestamp - CONSTANTS.statementLookbackDays * 86400),
+    endDate = os.date("%Y-%m-%d", nowTimestamp),
+    filterText = "",
+    hasCryptoAccount = false
+  }, CONSTANTS.documentHeaders)
+
+  local documents = data.statement and data.statement.docDetails and data.statement.docDetails.docDetail
+  if type(documents) ~= "table" then
+    error("Fidelity: Dokumentenliste fehlt in der Serverantwort.")
+  end
+
+  local statements = {}
+  for _, document in ipairs(documents) do
+    if document.acctNum == accountInfo.accountNumber and hasPdfFormat(document) then
+      if type(document.id) ~= "string" or document.id == "" then
+        error("Fidelity: Kontoauszug ohne Kennung in der Serverantwort.")
+      end
+      if type(document.periodStartDate) ~= "number" or type(document.periodEndDate) ~= "number" then
+        error("Fidelity: Kontoauszug ohne Zeitraum in der Serverantwort.")
+      end
+      if not knownSet[document.id] then
+        local startText = os.date("%Y-%m-%d", document.periodStartDate)
+        local endText = os.date("%Y-%m-%d", document.periodEndDate)
+        statements[#statements + 1] = {
+          name = "Kontoauszug " .. startText .. " bis " .. endText,
+          identifier = document.id,
+          creationDate = document.periodEndDate,
+          filename = string.format("Fidelity_%s_%s_%s.pdf",
+            string.sub(accountInfo.accountNumber, -4), startText, endText),
+          pdf = downloadStatement(document, accountInfo)
+        }
+      end
+    end
+  end
+  return statements
+end
+
+-- Kontotyp und Untertyp kommen von GetContext. Felder aus dem Konto-Objekt von MoneyMoney
+-- sind nicht garantiert vorhanden (nur accountNumber und name sind Standardfelder).
+local function resolveAccountInfo(account, person)
+  local asset = findAsset(person, account.accountNumber)
+  if type(asset.acctType) ~= "string" or type(asset.acctSubType) ~= "string" then
+    error("Fidelity: Kontotyp fehlt in GetContext.")
+  end
+  return {
+    name = account.name,
+    accountNumber = account.accountNumber,
+    accountType = asset.acctType,
+    accountSubType = asset.acctSubType
+  }, asset
 end
 
 function RefreshAccount(account, since)
@@ -649,198 +740,62 @@ function RefreshAccount(account, since)
   end
 
   MM.printStatus("Refreshing account: " .. account.name)
+  local nowTimestamp = os.time()
 
-  local headers = {
-    ["Accept"] = "*/*",
-    ["Content-Type"] = "application/json",
-    ["Cookie"] = session.cookies,
-    ["Origin"] = "https://digital.fidelity.com",
-    ["Referer"] = CONSTANTS.portfolioSummary,
-    ["apollographql-client-version"] = "0.0.0"
+  local person = fetchContext()
+  local accountInfo, asset = resolveAccountInfo(account, person)
+  local balance = accountTotal(asset)
+  local securities = buildPositions(fetchPositions(accountInfo, person.id), accountInfo.accountNumber)
+  -- Umsätze sind Zusatzdaten: Ein Fehler darf Saldo und Positionen nicht verwerfen.
+  -- Schlägt der Abruf fehl, fehlt das Feld "transactions" in der Rückgabe.
+  local transactionsOk, transactionsResult = pcall(fetchTransactions, accountInfo, since, nowTimestamp)
+  local transactions = nil
+  if transactionsOk then
+    transactions = transactionsResult
+  else
+    MM.printStatus("Fidelity: Umsätze nicht abgerufen: " .. tostring(transactionsResult))
+  end
+
+  return {
+    balance = balance,
+    securities = securities,
+    transactions = transactions
   }
+end
 
-  local function fetchGraphqlPositions()
-    local positionsQuery = {
-      operationName = "GetPositions",
-      variables = {
-        acctList = {
-          {
-            acctNum = account.accountNumber,
-            acctType = account.accountType or "Brokerage",
-            acctSubType = account.accountSubType or "Mutual Fund",
-            preferenceDetail = false
-          }
-        },
-        customerId = ""
-      },
-      query = [[query GetPositions($acctList: [PositionAccountInput], $customerId: String) {
-        getPosition(acctList: $acctList, customerId: $customerId) {
-          position {
-            acctDetails {
-              acctDetail {
-                acctNum
-                positionDetails {
-                  positionDetail {
-                    symbol
-                    cusip
-                    securityDescription
-                    quantity
-                    marketValDetail {
-                      marketVal
-                      totalGainLoss
-                      __typename
-                    }
-                    __typename
-                  }
-                  __typename
-                }
-                __typename
-              }
-              __typename
-            }
-            __typename
-          }
-          topBottomPositions {
-            symbol
-            lastPrice
-            __typename
-          }
-          __typename
-        }
-      }]]
-    }
-
-    local response, _, mimeType = connection:request(
-      "POST",
-      CONSTANTS.graphqlApi .. "?ref_at=portsum",
-      JSON():set(positionsQuery):json(),
-      "application/json",
-      headers
-    )
-    -- GraphQL kann fehlschlagen (z.B. 404) und dabei kann `connection:getCookies()`
-    -- ggf. das Cookie-Jar wieder auf einen weniger vollständigen Stand bringen
-    -- (fehlende portsum_.csrf Cookies). Für den REST-Fallback ist dann
-    -- die ursprüngliche `session.cookies` (aus Cookie-Import) entscheidend.
-    local newCookies = connection:getCookies() or ""
-    if newCookies ~= "" and extractCookieValue(newCookies, "portsum_.csrf") then
-      -- Nur aktualisieren, wenn wirklich der kritische portsum_.csrf Wert dabei ist.
-      -- Sonst kann es passieren, dass nach einem GraphQL-Fehlschlag nur Teil-Cookies
-      -- im Jar landen und der REST-Fallback dann "ports=false" sieht.
-      session.cookies = mergeCookies(session.cookies, newCookies)
-    end
-    if not response or type(response) ~= "string" then
-      return nil
-    end
-
-    if response:find("<!doctype html", 1, false) or (mimeType and mimeType:find("html")) then
-      return nil
-    end
-
-    local success, data = pcall(function() return JSON(response):dictionary() end)
-    if not success or not data or not data.data or not data.data.getPosition then
-      return nil
-    end
-
-    return data
-  end
-
-  local localData = fetchGraphqlPositions()
-  if localData then
-    local graphqlPortfolio = buildGraphqlPortfolio(localData)
-    if graphqlPortfolio then
-      return graphqlPortfolio
+-- MoneyMoney ruft diese Funktion für die Kontoauszüge auf. Ein Fehler wird als Text zurückgegeben,
+-- damit MoneyMoney ihn anzeigt; bereits geladene Auszüge werden dann nicht übergeben.
+function FetchStatements(accounts, knownIdentifiers)
+  local knownSet = {}
+  if type(knownIdentifiers) == "table" then
+    for key, value in pairs(knownIdentifiers) do
+      if type(key) == "number" and type(value) == "string" then
+        knownSet[value] = true
+      elseif type(key) == "string" then
+        knownSet[key] = true
+      end
     end
   end
 
-  -- REST-Fallback: asset-allocation liefert mindestens Marktwerte (Balance).
-  local restHeadersBase = {
-    -- HAR (digital.fidelity.com/ftgw/digital/portfolio/performance) verwendet eine "json, text/plain"-Accept-Matrix
-    ["Accept"] = "application/json, text/plain, */*",
-    ["Content-Type"] = "application/json",
-    ["Cookie"] = session.cookies,
-    ["Origin"] = "https://digital.fidelity.com",
-    -- Für performance-api sind Referer/Context relevant.
-    ["Referer"] = "https://digital.fidelity.com/ftgw/digital/portfolio/performance",
-    -- In HAR ist bei vielen performance-api Calls zusätzlich ein IP-Override Header gesetzt.
-    ["x-override-ip"] = "true",
-    ["X-Requested-With"] = "XMLHttpRequest"
-  }
-
-  local body = {
-    includeAggregate = true,
-    includeHoldingsDetails = true,
-    includeGranular = true,
-    excludeEquityStyle = false,
-    excludeBondStyle = false,
-    accounts = {
-      {
-        accountNum = account.accountNumber,
-        -- Fidelitys `asset-allocation` scheint diese Felder (zumindest im HAR) für die Anfrageform
-        -- eng zu erwarten; deshalb konstant setzen und nur `accountNum` variieren.
-        accountType = "Brokerage",
-        accountSubType = "Mutual Fund"
-      }
-    }
-  }
-
-  local csrfPorts = extractCookieValue(session.cookies, "portsum_.csrf")
-  local csrfPortsum = extractCookieValue(session.cookies, "PORTSUM_XSRF-TOKEN")
-
-  local function isHtmlLogin(resp, mt)
-    if not resp or type(resp) ~= "string" then
-      return false
+  local ok, result = pcall(function()
+    local person = fetchContext()
+    local statements = {}
+    for _, account in ipairs(accounts or {}) do
+      if not account or not account.accountNumber then
+        error("Fidelity: Kontoauszug ohne Kontonummer nicht möglich.")
+      end
+      local accountInfo = resolveAccountInfo(account, person)
+      for _, statement in ipairs(fetchNewStatements(accountInfo, knownSet)) do
+        statements[#statements + 1] = statement
+      end
     end
-    return resp:find("<!doctype html", 1, false)
-      or (mt and mt:find("html"))
-      or (resp:find("<html", 1, false) ~= nil)
+    return { statements = statements }
+  end)
+
+  if not ok then
+    return tostring(result)
   end
-
-  local function fetchAssetAllocationWithCsrf(csrfToken)
-    local restHeaders = {}
-    for k, v in pairs(restHeadersBase) do
-      restHeaders[k] = v
-    end
-    if csrfToken then
-      -- Einige Fidelity-Endpunkte akzeptieren "x-csrf-token" statt "X-XSRF-TOKEN".
-      restHeaders["x-csrf-token"] = csrfToken
-    end
-
-    local response, _, mimeType = connection:request(
-      "POST",
-      CONSTANTS.assetAllocationApi,
-      JSON():set(body):json(),
-      "application/json",
-      restHeaders
-    )
-    local newCookies = connection:getCookies() or ""
-    if newCookies ~= "" and extractCookieValue(newCookies, "portsum_.csrf") then
-      session.cookies = mergeCookies(session.cookies, newCookies)
-    end
-
-    if not response or type(response) ~= "string" then
-      return nil, mimeType
-    end
-    return response, mimeType
-  end
-
-  -- Deterministisch: bevorzugt PORTSUM_XSRF-TOKEN, sonst portsum_.csrf.
-  local csrfTokenPreferred = csrfPortsum or csrfPorts
-  local response, mimeType = fetchAssetAllocationWithCsrf(csrfTokenPreferred)
-
-  if not response or type(response) ~= "string" then
-    error("Fidelity: Keine Serverantwort beim Kontoabruf.")
-  end
-
-  if isHtmlLogin(response, mimeType) then
-    error("Fidelity: performance-api Session ungültig (Login-Seite bekommen). Bitte Cookie Import mit frischen Cookies wiederholen (PORTSUM_XSRF-TOKEN / portsum_.csrf prüfen).")
-  end
-
-  local success, data = pcall(function() return JSON(response):dictionary() end)
-  if not success or not data then
-    error("Fidelity: Ungültige Serverantwort beim Kontoabruf.")
-  end
-
-  return buildRestPortfolio(data)
+  return result
 end
 
 function EndSession()

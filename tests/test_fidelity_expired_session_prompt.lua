@@ -19,8 +19,8 @@ JSON = function(input)
   function builder:set(_) return self end
   function builder:json() return "{}" end
   function builder:dictionary()
-    if input == "GRAPHQL_OK" then
-      return { data = { getContext = { person = { assets = { { acctNum = "1" } } } } } }
+    if input == "GETCONTEXT_OK" then
+      return { getContext = { person = { id = "1", assets = { { acctNum = "1" } } } } }
     end
     error("invalid json")
   end
@@ -41,7 +41,7 @@ function Connection()
       end
       local cookie = headers and headers["Cookie"] or ""
       if cookie:find("ATC=new", 1, true) then
-        return "GRAPHQL_OK", nil
+        return "GETCONTEXT_OK", nil
       end
       return "not ok", nil
     end,

@@ -29,10 +29,6 @@ function Connection()
     request = function(self, method, url, body, contentType, headers)
       capturedHeaders = headers
       capturedRequest = { method = method, url = url, body = body, contentType = contentType }
-      -- Erfolgreiche Session-Validierung via GraphQL
-      if url and url:find("picoserver/api/graphql", 1, true) then
-        return "GRAPHQL_OK", nil
-      end
       -- REST-Fallback Validierung
       if url and url:find("portfolio/api/GetContext", 1, true) then
         return "GETCONTEXT_OK", nil
@@ -52,29 +48,9 @@ JSON = function(input)
   if input ~= nil then
     return {
       dictionary = function()
-        if input ~= "GRAPHQL_OK" and input ~= "GETCONTEXT_OK" then
+        if input ~= "GETCONTEXT_OK" then
           error("invalid json")
         end
-        if input == "GRAPHQL_OK" then
-          return {
-            data = {
-              getContext = {
-                person = {
-                  assets = {
-                    {
-                      acctNum = "123",
-                      acctType = "Brokerage",
-                      acctSubType = "Brokerage",
-                      acctSubTypeDesc = "Account",
-                      gainLossBalanceDetail = { totalMarketVal = "22060.27" }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        end
-
         return {
           totalMarketVal = 22060.27
         }
@@ -270,8 +246,8 @@ do
     setCookie = function() end,
     getCookies = function() return "ATC=fresh; ET=token" end,
     request = function(self, method, url, body, contentType, headers)
-      if url and url:find("picoserver/api/graphql", 1, true) then
-        return "GRAPHQL_OK", nil
+      if url and url:find("portfolio/api/GetContext", 1, true) then
+        return "GETCONTEXT_OK", nil
       end
       return "not ok", nil
     end,
